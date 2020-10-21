@@ -63,14 +63,20 @@ class Client:
 
     def run(self):
         body = {
-            "script": "/home/jovyan/kris/test.sh hello from kris",
+            "script": "/home/jovyan/kris/test.py hello from kris",
             "base_image": "registry.aicloud.sbcp.ru/horovod-tf2",
+            "n_workers": 1,
+            "n_gpus": 1,
+            "warm_cache": False,
         }
         r = self._api("POST", "/jobs", body=body)
         return r
 
     def status(self, job_id):
         return self._api("GET", f"/jobs/{job_id}")
+
+    def logs(self, job_id):
+        return self._api("GET", f"/jobs/{job_id}/logs", stream=True)
 
     def _get_access_token(self):
         body = {
@@ -80,7 +86,7 @@ class Client:
         r = self._api("POST", "/auth", body=body)
         self.user_data.access_token = r["token"]["access_token"]
 
-    def _api(self, verb, method, *, headers=None, body=None):
+    def _api(self, verb, method, *, headers=None, body=None, **kwargs):
         # Construct headers
         default_headers = {
             "X-Api-Key": self.user_data.api_key,
@@ -93,19 +99,31 @@ class Client:
         else:
             headers = default_headers
 
+        # Send request
         logger.debug(f"> {verb} {method} {headers} {body}")
-        r = requests.request(verb, self.API_URL + method, headers=headers, json=body)
+        r = requests.request(verb, self.API_URL + method,
+                             headers=headers, json=body, **kwargs)
         logger.debug(f"< {r.status_code} {r.text}")
 
+        # Return result
         if r.status_code == requests.codes.ok:
+            if "logs" in method:
+                return self._stream_iterator(r)
             return r.json()
 
-        # Reauthorize
+        # Handle errors
         if r.json().get("error_message") == "access_token expired":
             self._get_access_token()
             return self._api(verb, method, body=body, headers=headers)
         else:
             raise RuntimeError(f"API Error: {r}")
+
+    def _stream_iterator(self, r):
+        if r.encoding is None:
+            r.encoding = "utf-8"
+        for line in r.iter_lines(decode_unicode=True):
+            if line:
+                yield line + "\n"
 
 
 def human_time(timestamp):
@@ -160,20 +178,22 @@ def list():
     if len(jobs) == 0:
         click.secho("No jobs", bold=True)
         return
-    click.secho("Jobs:", bold=True)
-    click.secho("started             status\tname", fg="yellow", bold=True)
+    click.secho("started              status\tname", fg="yellow", bold=True)
     click.secho("-" * 79, fg="yellow", bold=True)
-    for job in jobs:
+    for job in sorted(jobs, key=lambda x: x["created_at"]):
         started = human_time(job["created_at"])
         status = job["status"]
         name = job["job_name"]
-        click.secho(f"{started} {status}\t{name}", fg="yellow", bold=True)
+        click.secho(f"{started}  {status}\t{name}", fg="yellow", bold=True)
 
 
 @main.command()
 @click.argument("job_id")
 def status(job_id):
     status = client.status(job_id)
+    if status["status"] != "ok":
+        click.secho(f"Error: {status['error_message']}", fg="red", bold=True)
+        return
     click.secho(f"ID:        ", fg="yellow", bold=True, nl=False)
     click.secho(status["job_name"], bold=True)
     for stage in ["created", "pending", "running", "completed"]:
@@ -182,6 +202,12 @@ def status(job_id):
             stage = stage.title() + ":"
             click.secho(f"{stage:10} ", fg="yellow", bold=True, nl=False)
             click.secho(time, bold=True)
+
+
+@main.command()
+@click.argument("job_id")
+def logs(job_id):
+    click.echo_via_pager(client.logs(job_id))
 
 
 @main.command()
