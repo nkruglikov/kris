@@ -2,6 +2,15 @@ import click
 import keyring
 import requests
 
+import datetime
+import logging
+
+
+logger = logging.getLogger(__name__)
+handler = logging.StreamHandler()
+handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+logger.addHandler(handler)
+
 
 class UserData:
 
@@ -52,6 +61,17 @@ class Client:
         r = self._api("GET", "/jobs")
         return r["jobs"]
 
+    def run(self):
+        body = {
+            "script": "/home/jovyan/kris/test.sh hello from kris",
+            "base_image": "registry.aicloud.sbcp.ru/horovod-tf2",
+        }
+        r = self._api("POST", "/jobs", body=body)
+        return r
+
+    def status(self, job_id):
+        return self._api("GET", f"/jobs/{job_id}")
+
     def _get_access_token(self):
         body = {
             "email": self.user_data.email,
@@ -60,7 +80,7 @@ class Client:
         r = self._api("POST", "/auth", body=body)
         self.user_data.access_token = r["token"]["access_token"]
 
-    def _api(self, verb, method, *, body=None, headers=None):
+    def _api(self, verb, method, *, headers=None, body=None):
         # Construct headers
         default_headers = {
             "X-Api-Key": self.user_data.api_key,
@@ -73,23 +93,35 @@ class Client:
         else:
             headers = default_headers
 
-        r = requests.request(verb, self.API_URL + method, json=body, headers=headers)
-        r = r.json()
+        logger.debug(f"> {verb} {method} {headers} {body}")
+        r = requests.request(verb, self.API_URL + method, headers=headers, json=body)
+        logger.debug(f"< {r.status_code} {r.text}")
+
+        if r.status_code == requests.codes.ok:
+            return r.json()
 
         # Reauthorize
-        if r["error_code"] != 0 and r["error_message"] == "access_token expired":
+        if r.json().get("error_message") == "access_token expired":
             self._get_access_token()
             return self._api(verb, method, body=body, headers=headers)
+        else:
+            raise RuntimeError(f"API Error: {r}")
 
-        return r
+
+def human_time(timestamp):
+    return datetime.datetime.fromtimestamp(timestamp) \
+                            .isoformat(" ", "seconds")
+
 
 
 client = Client()
 
 
 @click.group()
-def main():
-    pass
+@click.option("--debug", is_flag=True, help="enable debug output")
+def main(debug):
+    if debug:
+        logger.setLevel(logging.DEBUG)
 
 
 @main.command()
@@ -126,11 +158,35 @@ def auth(force):
 def list():
     jobs = client.list_jobs()
     if len(jobs) == 0:
-        click.secho("No jobs", color="yellow", bold=True)
+        click.secho("No jobs", bold=True)
         return
-    click.secho("Jobs:", color="yellow", bold=True)
+    click.secho("Jobs:", bold=True)
+    click.secho("started             status\tname", fg="yellow", bold=True)
+    click.secho("-" * 79, fg="yellow", bold=True)
     for job in jobs:
-        click.secho(job, bold=True)
+        started = human_time(job["created_at"])
+        status = job["status"]
+        name = job["job_name"]
+        click.secho(f"{started} {status}\t{name}", fg="yellow", bold=True)
+
+
+@main.command()
+@click.argument("job_id")
+def status(job_id):
+    status = client.status(job_id)
+    click.secho(f"ID:        ", fg="yellow", bold=True, nl=False)
+    click.secho(status["job_name"], bold=True)
+    for stage in ["created", "pending", "running", "completed"]:
+        if status.get(stage + "_at") != 0:
+            time = human_time(status[stage + "_at"])
+            stage = stage.title() + ":"
+            click.secho(f"{stage:10} ", fg="yellow", bold=True, nl=False)
+            click.secho(time, bold=True)
+
+
+@main.command()
+def run():
+    print(client.run())
 
 
 if __name__ == "__main__":
