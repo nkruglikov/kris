@@ -5,6 +5,8 @@ import requests
 import datetime
 import logging
 
+import s3
+
 
 logger = logging.getLogger(__name__)
 handler = logging.StreamHandler()
@@ -78,6 +80,22 @@ class Client:
     def logs(self, job_id):
         return self._api("GET", f"/jobs/{job_id}/logs", stream=True)
 
+    def transfer_file(self, src, dst):
+        src_is_s3 = s3.Path.is_correct(src)
+        dst_is_s3 = s3.Path.is_correct(dst)
+        if src_is_s3 and not dst_is_s3:
+            src = s3.Path(src)
+            s3_path = src
+        elif dst_is_s3 and not src_is_s3:
+            dst = s3.Path(dst)
+            s3_path = dst
+        else:
+            raise RuntimeError("Exactly one of (src, dst) should be S3 path")
+
+        self._set_s3_settings(s3_path.bucket)
+        body = {"src": str(src), "dst": str(dst)}
+        return self._api("POST", "/s3/copy", body=body)
+
     def _get_access_token(self):
         body = {
             "email": self.user_data.email,
@@ -124,6 +142,14 @@ class Client:
         for line in r.iter_lines(decode_unicode=True):
             if line:
                 yield line + "\n"
+
+    def _set_s3_settings(self, bucket):
+        body = {
+            "s3_namespace": bucket.namespace,
+            "access_key_id": bucket.access_key_id,
+            "security_key": bucket.secret_access_key,
+        }
+        return self._api("POST", "/s3/credentials", body=body)
 
 
 def human_time(timestamp):
@@ -213,6 +239,13 @@ def logs(job_id):
 @main.command()
 def run():
     print(client.run())
+
+
+@main.command()
+@click.argument("src")
+@click.argument("dst")
+def transfer(src, dst):
+    print(client.transfer_file(src, dst))
 
 
 if __name__ == "__main__":
