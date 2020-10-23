@@ -1,9 +1,12 @@
 import datetime
 import logging
+import shutil
+import tempfile
 
 import backoff
 import click
 import keyring
+import os
 import requests
 
 import s3
@@ -103,8 +106,8 @@ class Client:
     @backoff.on_predicate(backoff.expo, max_value=10)
     def wait_for_job(self, job_id, service=False):
         job_status = self.status(job_id, service)
-        if service and job_status["status"] == "Complete":
-            return True
+        if service and job_status["status"] in ("Complete", "Failed"):
+            return job_status
         if not service and job_status.get("completed_at", 0) > 0:
             return True
         return False
@@ -117,14 +120,15 @@ class Client:
         r = self._api("POST", "/auth", body=body)
         self.user_data.access_token = r["token"]["access_token"]
 
-    @backoff.on_exception(backoff.fibo,
-                          requests.exceptions.RequestException,
-                          max_time=60,
-                          giveup=lambda e: (
-                              400 <= e.response.status_code < 500
-                              and e.response.status_code != 429
-                          ),
-                          logger=logger,
+    @backoff.on_exception(
+        backoff.fibo,
+        requests.exceptions.RequestException,
+        max_time=60,
+        giveup=lambda e: (
+          400 <= e.response.status_code < 500
+          and e.response.status_code != 429
+        ),
+        logger=logger,
     )
     def _api(self, verb, method, *, headers=None, body=None, **kwargs):
         # Construct headers
@@ -277,6 +281,29 @@ def run():
 def transfer(src, dst):
     job_info = client.transfer_file(src, dst)
     client.wait_for_job(job_info["job_name"], service=True)
+
+
+@main.command()
+@click.argument("local_path")
+@click.argument("nfs_path")
+def upload(local_path, nfs_path):
+    bucket = s3.Bucket()
+    with tempfile.TemporaryDirectory() as tmp:
+        archive_path = os.path.join(tmp, "archive")
+        click.secho(f"Compressing \"{local_path}\"...", bold=True)
+        shutil.make_archive(archive_path, "gztar", local_path)
+        click.secho(f"Uploading \"{local_path}\" to S3...", bold=True)
+        s3_path = bucket.upload_local_file(archive_path + ".tar.gz")
+    click.secho(f"Transfering from S3 to NFS: {nfs_path}...", bold=True)
+    job_info = client.transfer_file(str(s3_path), nfs_path)
+    job_info = client.wait_for_job(job_info["job_name"], service=True)
+    if job_info["status"] == "Complete":
+        click.secho(f"Upload successful", fg="green", bold=True)
+    elif job_info["status"] == "Failed":
+        click.secho(f"Upload unsuccessful", fg="red", bold=True)
+    else:
+        click.secho(f"Upload job finished with unknown status: "
+                    + job_info["status"], fg="red", bold=True)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,4 @@
 import os
-import shutil
-import tempfile
 
 import boto3
 
@@ -33,7 +31,9 @@ class Bucket:
             aws_secret_access_key=self.secret_access_key,
             endpoint_url=self.endpoint_url,
         )
-        s3_client.upload_file(path, self.bucket_id, "kris/" + os.path.basename(path))
+        s3_path = "kris/" + os.path.basename(path)
+        s3_client.upload_file(path, self.bucket_id, s3_path)
+        return self.make_path(s3_path)
 
     def __getattr__(self, name):
         if name in self._properties:
@@ -44,6 +44,9 @@ class Bucket:
     def endpoint_url(self):
         return "https://{}.s3pd02.sbercloud.ru".format(self.namespace)
 
+    def make_path(self, path):
+        return Path(f"s3://{self.bucket_id}/{path}")
+
 
 class Path:
     def __init__(self, path):
@@ -51,7 +54,7 @@ class Path:
             raise RuntimeError("Path should start with \"s3://\"")
 
         parts = path[len("s3://"):].split("/")
-        first_part = path[0]
+        first_part = parts[0]
 
         # Suppose that first part is bucket alias
         if first_part in config.buckets:
@@ -82,12 +85,3 @@ class Path:
     @staticmethod
     def is_correct(path):
         return path.startswith("s3://")
-
-
-def send_from_local_to_s3(path, bucket):
-    with tempfile.TemporaryDirectory() as tmp:
-        archive_path = os.path.join(tmp, "archive")
-        shutil.make_archive(archive_path, "gztar", path)
-        bucket.upload_local_file(archive_path)
-
-
