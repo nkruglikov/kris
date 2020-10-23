@@ -1,9 +1,10 @@
+import datetime
+import logging
+
+import backoff
 import click
 import keyring
 import requests
-
-import datetime
-import logging
 
 import s3
 
@@ -99,6 +100,15 @@ class Client:
         body = {"src": str(src), "dst": str(dst)}
         return self._api("POST", "/s3/copy", body=body)
 
+    @backoff.on_predicate(backoff.expo, max_value=10)
+    def wait_for_job(self, job_id, service=False):
+        job_status = self.status(job_id, service)
+        if service and job_status["status"] == "Complete":
+            return True
+        if not service and job_status.get("completed_at", 0) > 0:
+            return True
+        return False
+
     def _get_access_token(self):
         body = {
             "email": self.user_data.email,
@@ -107,6 +117,15 @@ class Client:
         r = self._api("POST", "/auth", body=body)
         self.user_data.access_token = r["token"]["access_token"]
 
+    @backoff.on_exception(backoff.fibo,
+                          requests.exceptions.RequestException,
+                          max_time=60,
+                          giveup=lambda e: (
+                              400 <= e.response.status_code < 500
+                              and e.response.status_code != 429
+                          ),
+                          logger=logger,
+    )
     def _api(self, verb, method, *, headers=None, body=None, **kwargs):
         # Construct headers
         default_headers = {
@@ -136,8 +155,7 @@ class Client:
         if r.json().get("error_message") == "access_token expired":
             self._get_access_token()
             return self._api(verb, method, body=body, headers=headers)
-        else:
-            raise RuntimeError(f"API Error: {r}")
+        r.raise_for_status()
 
     def _stream_iterator(self, r):
         if r.encoding is None:
@@ -202,15 +220,19 @@ def auth(force):
 
 
 @main.command()
-def list():
-    jobs = client.list_jobs()
+@click.option("--service", is_flag=True)
+def list(service):
+    jobs = client.list_jobs(service)
     if len(jobs) == 0:
         click.secho("No jobs", bold=True)
         return
     click.secho("started              status\tname", fg="yellow", bold=True)
     click.secho("-" * 79, fg="yellow", bold=True)
-    for job in sorted(jobs, key=lambda x: x["created_at"]):
-        started = human_time(job["created_at"])
+    for job in sorted(jobs, key=lambda x: x.get("created_at", 0)):
+        if not service:
+            started = human_time(job["created_at"])
+        else:
+            started = "?" * 16
         status = job["status"]
         name = job["job_name"]
         click.secho(f"{started}  {status}\t{name}", fg="yellow", bold=True)
@@ -218,19 +240,24 @@ def list():
 
 @main.command()
 @click.argument("job_id")
-def status(job_id):
-    status = client.status(job_id)
-    if status["status"] != "ok":
+@click.option("--service", is_flag=True)
+def status(job_id, service):
+    status = client.status(job_id, service)
+    if status["error_message"] != "":
         click.secho(f"Error: {status['error_message']}", fg="red", bold=True)
         return
     click.secho(f"ID:        ", fg="yellow", bold=True, nl=False)
     click.secho(status["job_name"], bold=True)
+    if service:
+        click.secho("Status:    ", fg="yellow", bold=True, nl=False)
+        click.secho(status["status"], bold=True)
+        return
     for stage in ["created", "pending", "running", "completed"]:
         if status.get(stage + "_at") != 0:
-            time = human_time(status[stage + "_at"])
+            timestamp = human_time(status[stage + "_at"])
             stage = stage.title() + ":"
             click.secho(f"{stage:10} ", fg="yellow", bold=True, nl=False)
-            click.secho(time, bold=True)
+            click.secho(timestamp, bold=True)
 
 
 @main.command()
@@ -248,7 +275,8 @@ def run():
 @click.argument("src")
 @click.argument("dst")
 def transfer(src, dst):
-    print(client.transfer_file(src, dst))
+    job_info = client.transfer_file(src, dst)
+    client.wait_for_job(job_info["job_name"], service=True)
 
 
 if __name__ == "__main__":
