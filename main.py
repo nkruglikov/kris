@@ -76,9 +76,9 @@ class Client:
         prefix = "/service" if service else ""
         return self._api("GET", f"{prefix}/jobs/{job_id}/logs", stream=True)
 
-    def run(self):
+    def run(self, script):
         body = {
-            "script": "/home/jovyan/kris/test.py hello from kris",
+            "script": f"/home/jovyan/{script}",
             "base_image": "registry.aicloud.sbcp.ru/horovod-tf2",
             "n_workers": 1,
             "n_gpus": 1,
@@ -125,8 +125,9 @@ class Client:
         requests.exceptions.RequestException,
         max_time=60,
         giveup=lambda e: (
-          400 <= e.response.status_code < 500
-          and e.response.status_code != 429
+            # retry server errors and Too Many Requests
+            400 <= e.response.status_code < 500
+            and e.response.status_code != 429
         ),
         logger=logger,
     )
@@ -271,8 +272,12 @@ def logs(job_id):
 
 
 @main.command()
-def run():
-    print(client.run())
+@click.argument("executable")
+def run(executable):
+    executable_path = os.path.dirname(executable)
+    upload.callback(executable_path, "kris/executable.tar.gz")
+    upload.callback("agent.py", "kris")
+    print(client.run("kris/agent.py kris/executable.tar.gz"))
 
 
 @main.command()
@@ -288,12 +293,16 @@ def transfer(src, dst):
 @click.argument("nfs_path")
 def upload(local_path, nfs_path):
     bucket = s3.Bucket()
-    with tempfile.TemporaryDirectory() as tmp:
-        archive_path = os.path.join(tmp, "archive")
-        click.secho(f"Compressing \"{local_path}\"...", bold=True)
-        shutil.make_archive(archive_path, "gztar", local_path)
+    if os.path.isdir(local_path):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = os.path.join(tmp, "archive")
+            click.secho(f"Compressing \"{local_path}\"...", bold=True)
+            shutil.make_archive(archive_path, "gztar", local_path)
+            click.secho(f"Uploading \"{local_path}\" to S3...", bold=True)
+            s3_path = bucket.upload_local_file(archive_path + ".tar.gz")
+    else:
         click.secho(f"Uploading \"{local_path}\" to S3...", bold=True)
-        s3_path = bucket.upload_local_file(archive_path + ".tar.gz")
+        s3_path = bucket.upload_local_file(local_path)
     click.secho(f"Transfering from S3 to NFS: {nfs_path}...", bold=True)
     job_info = client.transfer_file(str(s3_path), nfs_path)
     job_info = client.wait_for_job(job_info["job_name"], service=True)
