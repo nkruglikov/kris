@@ -59,9 +59,18 @@ class Client:
         self.user_data.api_key = api_key
         self._get_access_token()
 
-    def list_jobs(self):
-        r = self._api("GET", "/jobs")
+    def list_jobs(self, service=False):
+        prefix = "/service" if service else ""
+        r = self._api("GET", f"{prefix}/jobs")
         return r["jobs"]
+
+    def status(self, job_id, service=False):
+        prefix = "/service" if service else ""
+        return self._api("GET", f"{prefix}/jobs/{job_id}")
+
+    def logs(self, job_id, service=False):
+        prefix = "/service" if service else ""
+        return self._api("GET", f"{prefix}/jobs/{job_id}/logs", stream=True)
 
     def run(self):
         body = {
@@ -73,12 +82,6 @@ class Client:
         }
         r = self._api("POST", "/jobs", body=body)
         return r
-
-    def status(self, job_id):
-        return self._api("GET", f"/jobs/{job_id}")
-
-    def logs(self, job_id):
-        return self._api("GET", f"/jobs/{job_id}/logs", stream=True)
 
     def transfer_file(self, src, dst):
         src_is_s3 = s3.Path.is_correct(src)
