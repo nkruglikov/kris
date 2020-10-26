@@ -25,7 +25,7 @@ setup(
         "requests>=2.24.0",
         "toml>=0.10.1",
     ],
-    packages=find_packages("kris"),
+    packages=find_packages(),
     entry_points={
         "console_scripts": [
             "kris=kris.main:main",
