@@ -6,12 +6,20 @@ import toml
 
 
 class Config:
-    def __init__(self, path="config.toml"):
+    def __init__(self, path=None):
+        if path is None:
+            path = self._get_default_path()
         self._dict = toml.load(path)
 
     @property
     def buckets(self):
         return self._dict["buckets"]
+
+    @staticmethod
+    def _get_default_path():
+        return os.path.expanduser(
+            os.path.join("~", ".config", "kris", "config.toml"))
+
 
 
 config = Config()

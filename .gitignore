@@ -1,5 +1,7 @@
+# python
 env/
 __pycache__/
+*.egg-info
 
 # vim
 *~

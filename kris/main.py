@@ -10,7 +10,7 @@ import keyring
 import os
 import requests
 
-import s3
+from . import s3
 
 
 logger = logging.getLogger(__name__)
@@ -287,8 +287,12 @@ def run(executable):
     executable = os.path.abspath(executable)
     executable_path = os.path.dirname(executable)
     executable_name = os.path.basename(executable)
+    agent_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "agent.py",
+    )
     upload.callback(executable_path, "kris/executable.tar.gz")
-    upload.callback("agent.py", "kris")
+    upload.callback(agent_path, "kris")
     job_info = client.run("kris/agent.py kris/executable.tar.gz " + executable_name)
     for line in client.wait_for_logs(job_info["job_name"]):
         print(line, end="")
@@ -327,7 +331,3 @@ def upload(local_path, nfs_path):
     else:
         click.secho(f"Upload job finished with unknown status: "
                     + job_info["status"], fg="red", bold=True)
-
-
-if __name__ == "__main__":
-    main()
