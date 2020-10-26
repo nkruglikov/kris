@@ -1,4 +1,5 @@
 import datetime
+import itertools
 import logging
 import shutil
 import tempfile
@@ -83,6 +84,7 @@ class Client:
             "n_workers": 1,
             "n_gpus": 1,
             "warm_cache": False,
+            "flags": {},
         }
         r = self._api("POST", "/jobs", body=body)
         return r
@@ -111,6 +113,14 @@ class Client:
         if not service and job_status.get("completed_at", 0) > 0:
             return True
         return False
+
+    @backoff.on_predicate(backoff.expo, max_value=10)
+    def wait_for_logs(self, job_id, service=False):
+        logs = self.logs(job_id, service)
+        first_line = next(logs)
+        if first_line.startswith("Job in queue."):
+            return False
+        return itertools.chain([first_line], logs)
 
     def _get_access_token(self):
         body = {
@@ -274,10 +284,14 @@ def logs(job_id):
 @main.command()
 @click.argument("executable")
 def run(executable):
+    executable = os.path.abspath(executable)
     executable_path = os.path.dirname(executable)
+    executable_name = os.path.basename(executable)
     upload.callback(executable_path, "kris/executable.tar.gz")
     upload.callback("agent.py", "kris")
-    print(client.run("kris/agent.py kris/executable.tar.gz"))
+    job_info = client.run("kris/agent.py kris/executable.tar.gz " + executable_name)
+    for line in client.wait_for_logs(job_info["job_name"]):
+        print(line, end="")
 
 
 @main.command()
