@@ -8,7 +8,7 @@ long_description = (here / "README.md").read_text(encoding="utf-8")
 
 setup(
     name="kris",
-    version="0.0.2",
+    version="0.0.1",
     description="A cli tool for interaction with Christofari",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -25,6 +25,7 @@ setup(
         "requests>=2.24.0",
         "toml>=0.10.1",
     ],
+    packages=find_packages("kris"),
     entry_points={
         "console_scripts": [
             "kris=kris.main:main",
