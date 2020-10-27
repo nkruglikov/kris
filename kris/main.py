@@ -415,15 +415,28 @@ def logs(job_id, service, image):
 @main.command()
 @click.argument("executable")
 @click.option("--image")
+@click.option("--requirements")
 @click.option("--root")
-def run(executable, image, root):
-    # detect root folder
+def run(executable, image, requirements, root):
     executable = os.path.abspath(executable)
-    executable_path = os.path.dirname(executable)
-    executable_name = os.path.basename(executable)
+
+    # detect root folder
+    if root is None:
+        root = os.path.dirname(executable)
+    else:
+        root = os.path.abspath(root)
+
+    # build image
+    if requirements is not None:
+        if image is not None:
+            click.secho("Don't set --image and --requirements together",
+                        bold=True, fg="red")
+            return  # FIXME: exit code
+        click.secho(f"Building image...", bold=True)
+        image = _build_image(requirements)
 
     # upload executable
-    upload_local_to_nfs(executable_path, "kris/executable.tar.gz")
+    upload_local_to_nfs(root, "kris/executable.tar.gz")
 
     # upload agent
     agent_path = os.path.join(
@@ -433,6 +446,7 @@ def run(executable, image, root):
     upload_local_to_nfs(agent_path, "kris")
 
     # run job
+    executable_name = os.path.basename(executable)
     job_info = client.run(
         "kris/agent.py kris/executable.tar.gz " + executable_name,
         base_image=image,
