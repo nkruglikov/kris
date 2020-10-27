@@ -1,8 +1,11 @@
 import datetime
+import hashlib
 import itertools
+import json
 import logging
 import shutil
 import tempfile
+from copy import deepcopy
 
 import backoff
 import click
@@ -64,6 +67,14 @@ class Client:
         self.user_data.api_key = api_key
         self._get_access_token()
 
+    def build_image(self, requirements_path):
+        body = {
+            "from_image": "registry.aicloud.sbcp.ru/horovod-tf2",
+            # FIXME: this will cause problems with separators on windows
+            "requirements_file": f"/home/jovyan/{requirements_path}",
+        }
+        return self._api("POST", "/service/image", body=body)
+
     def list_jobs(self, service=False):
         prefix = "/service" if service else ""
         r = self._api("GET", f"{prefix}/jobs")
@@ -73,16 +84,23 @@ class Client:
         prefix = "/service" if service else ""
         return self._api("GET", f"{prefix}/jobs/{job_id}")
 
-    def logs(self, job_id, service=False):
-        prefix = "/service" if service else ""
-        return self._api("GET", f"{prefix}/jobs/{job_id}/logs", stream=True)
+    def logs(self, job_id, service=False, image=False):
+        if image:
+            prefix = "/service/image"
+        elif service:
+            prefix = "/service/jobs"
+        else:
+            prefix = "/jobs"
+        return self._api("GET", f"{prefix}/{job_id}/logs", stream=True)
 
-    def run(self, script):
+    def run(self, script, base_image=None, n_workers=1, n_gpus=1, warm_cache=False):
+        if base_image is None:
+            base_image = "registry.aicloud.sbcp.ru/horovod-tf2"
         body = {
             "script": f"/home/jovyan/{script}",
-            "base_image": "registry.aicloud.sbcp.ru/horovod-tf2",
-            "n_workers": 1,
-            "n_gpus": 1,
+            "base_image": base_image,
+            "n_workers": n_workers,
+            "n_gpus": n_gpus,
             "warm_cache": False,
             "flags": {},
         }
@@ -142,6 +160,7 @@ class Client:
         logger=logger,
     )
     def _api(self, verb, method, *, headers=None, body=None, **kwargs):
+        # FIXME: this method is a mess
         # Construct headers
         default_headers = {
             "X-Api-Key": self.user_data.api_key,
@@ -155,10 +174,23 @@ class Client:
             headers = default_headers
 
         # Send request
-        logger.debug(f"> {verb} {method} {headers} {body}")
+        print_headers = self._censor(headers, ["X-Api-Key", "Authorization"])
+        if body is None:
+            print_body = "<empty body>"
+        else:
+            print_body = self._censor(body, ["email", "password",
+                                             "access_key_id", "security_key"])
+        logger.debug(f"> {verb} {method} {print_headers} {print_body}")
+
         r = requests.request(verb, self.API_URL + method,
                              headers=headers, json=body, **kwargs)
-        logger.debug(f"< {r.status_code} {r.text}")
+
+        if method == "auth":
+            print_response = self._censor(r.json(),
+                                          ["access_token", "refresh_token"])
+        else:
+            print_response = r.text
+        logger.debug(f"< {r.status_code} {print_response}")
 
         # Return result
         if r.status_code == requests.codes.ok:
@@ -187,14 +219,106 @@ class Client:
         }
         return self._api("POST", "/s3/credentials", body=body)
 
+    @classmethod
+    def _censor(cls, obj, censored_names):
+        if isinstance(obj, dict):
+            result = {}
+            for name, item in obj.items():
+                if name in censored_names:
+                    result[name] = 5 * "*"
+                else:
+                    result[name] = cls._censor(item, censored_names)
+        elif isinstance(obj, list):
+            result = []
+            for item in obj:
+                result.append(cls._censor(item, censored_names))
+        else:
+            result = deepcopy(obj)
+        return result
+
+
+class ImageCache:
+    def __init__(self, path=None):
+        if path is None:
+            path = self._get_default_path()
+        self.path = path
+        if not os.path.exists(path):
+            self._dump_cache({})
+
+    def has(self, path):
+        checksum = self._calc_checksum(path)
+        cache = self._load_cache()
+        return checksum in cache
+
+    def put(self, path, image_id):
+        checksum = self._calc_checksum(path)
+        cache = self._load_cache()
+        cache[checksum] = image_id
+        self._dump_cache(cache)
+
+    def _load_cache(self):
+        with open(self.path) as inp:
+            return json.load(inp)
+
+    def _dump_cache(self, cache):
+        with open(self.path, "w") as out:
+            json.dump(cache, out)
+
+    def _calc_checksum(self, path):
+        algo = hashlib.sha256()
+        with open(path, "rb") as inp:
+            algo.update(inp.read())
+        return algo.hexdigest()
+
+    @staticmethod
+    def _get_default_path():
+        return os.path.expanduser(
+            os.path.join("~", ".config", "kris", "image_cache.json"))
+
+
 
 def human_time(timestamp):
     return datetime.datetime.fromtimestamp(timestamp) \
                             .isoformat(" ", "seconds")
 
 
+def upload_local_to_nfs(local_path, nfs_path):
+    bucket = s3.Bucket()
+    if os.path.isdir(local_path):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = os.path.join(tmp, "archive")
+            click.secho(f"Compressing \"{local_path}\"...", bold=True)
+            shutil.make_archive(archive_path, "gztar", local_path)
+            click.secho(f"Uploading \"{local_path}\" to S3...", bold=True)
+            s3_path = bucket.upload_local_file(archive_path + ".tar.gz")
+    else:
+        click.secho(f"Uploading \"{local_path}\" to S3...", bold=True)
+        s3_path = bucket.upload_local_file(local_path)
+    click.secho(f"Transfering from S3 to NFS: {nfs_path}...", bold=True)
+    job_info = client.transfer_file(str(s3_path), nfs_path)
+    job_info = client.wait_for_job(job_info["job_name"], service=True)
+    if job_info["status"] == "Complete":
+        click.secho(f"Upload successful", fg="green", bold=True)
+    elif job_info["status"] == "Failed":
+        click.secho(f"Upload unsuccessful", fg="red", bold=True)
+    else:
+        click.secho(f"Upload job finished with unknown status: "
+                    + job_info["status"], fg="red", bold=True)
+
+
+def _build_image(requirements_path):
+    if image_cache.has(requirements_path):
+        return image_cache.get(requirements_path)
+    upload_local_to_nfs(requirements_path, "kris")
+    job_info = client.build_image("kris/requirements.txt")
+    image = job_info["image"]
+    client.wait_for_job(job_info["job_name"], service=True)
+    image_cache.put(requirements_path, image)
+    return image
+
 
 client = Client()
+image_cache = ImageCache()
 
 
 @click.group()
@@ -236,7 +360,7 @@ def auth(force):
 
 @main.command()
 @click.option("--service", is_flag=True)
-def list(service):
+def list_jobs(service):
     jobs = client.list_jobs(service)
     if len(jobs) == 0:
         click.secho("No jobs", bold=True)
@@ -277,23 +401,29 @@ def status(job_id, service):
 
 @main.command()
 @click.argument("job_id")
-def logs(job_id):
-    click.echo_via_pager(client.logs(job_id))
+@click.option("--service", is_flag=True)
+@click.option("--image", is_flag=True)
+def logs(job_id, service, image):
+    click.echo_via_pager(client.logs(job_id, service, image))
 
 
 @main.command()
 @click.argument("executable")
-def run(executable):
+@click.option("--image")
+def run(executable, image):
     executable = os.path.abspath(executable)
     executable_path = os.path.dirname(executable)
     executable_name = os.path.basename(executable)
     agent_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "agent.py",
+        os.path.dirname(os.path.abspath(__file__)),
+        "agent.py",
     )
-    upload.callback(executable_path, "kris/executable.tar.gz")
-    upload.callback(agent_path, "kris")
-    job_info = client.run("kris/agent.py kris/executable.tar.gz " + executable_name)
+    upload_local_to_nfs(executable_path, "kris/executable.tar.gz")
+    upload_local_to_nfs(agent_path, "kris")
+    job_info = client.run(
+        "kris/agent.py kris/executable.tar.gz " + executable_name,
+        base_image=image,
+    )
     for line in client.wait_for_logs(job_info["job_name"]):
         print(line, end="")
 
@@ -310,24 +440,14 @@ def transfer(src, dst):
 @click.argument("local_path")
 @click.argument("nfs_path")
 def upload(local_path, nfs_path):
-    bucket = s3.Bucket()
-    if os.path.isdir(local_path):
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_path = os.path.join(tmp, "archive")
-            click.secho(f"Compressing \"{local_path}\"...", bold=True)
-            shutil.make_archive(archive_path, "gztar", local_path)
-            click.secho(f"Uploading \"{local_path}\" to S3...", bold=True)
-            s3_path = bucket.upload_local_file(archive_path + ".tar.gz")
-    else:
-        click.secho(f"Uploading \"{local_path}\" to S3...", bold=True)
-        s3_path = bucket.upload_local_file(local_path)
-    click.secho(f"Transfering from S3 to NFS: {nfs_path}...", bold=True)
-    job_info = client.transfer_file(str(s3_path), nfs_path)
-    job_info = client.wait_for_job(job_info["job_name"], service=True)
-    if job_info["status"] == "Complete":
-        click.secho(f"Upload successful", fg="green", bold=True)
-    elif job_info["status"] == "Failed":
-        click.secho(f"Upload unsuccessful", fg="red", bold=True)
-    else:
-        click.secho(f"Upload job finished with unknown status: "
-                    + job_info["status"], fg="red", bold=True)
+    upload_local_to_nfs(local_path, nfs_path)
+
+
+@main.command()
+@click.argument("requirements")
+def build_image(requirements):
+    click.secho(f"Building image...", bold=True)
+    image = _build_image(requirements)
+    client.wait_for_job(job_info["job_name"], service=True)
+    click.secho(f"Image was built successfully. Identifier: {image}",
+                bold=True, fg="green")
