@@ -102,7 +102,7 @@ class Client:
             "n_workers": n_workers,
             "n_gpus": n_gpus,
             "warm_cache": False,
-            "flags": {},
+            "flags": {"please": "don't"},
         }
         r = self._api("POST", "/jobs", body=body)
         return r
@@ -165,7 +165,7 @@ class Client:
         default_headers = {
             "X-Api-Key": self.user_data.api_key,
         }
-        if method != "auth":
+        if method != "/auth":
             default_headers["Authorization"] = self.user_data.access_token
         if headers is not None:
             for name, value in default_headers.items():
@@ -185,7 +185,7 @@ class Client:
         r = requests.request(verb, self.API_URL + method,
                              headers=headers, json=body, **kwargs)
 
-        if method == "auth":
+        if method == "/auth":
             print_response = self._censor(r.json(),
                                           ["access_token", "refresh_token"])
         else:
@@ -414,10 +414,11 @@ def logs(job_id, service, image):
 
 @main.command()
 @click.argument("executable")
+@click.argument("args", nargs=-1)
 @click.option("--image")
 @click.option("--requirements")
 @click.option("--root")
-def run(executable, image, requirements, root):
+def run(executable, args, image, requirements, root):
     executable = os.path.abspath(executable)
 
     # detect root folder
@@ -445,10 +446,15 @@ def run(executable, image, requirements, root):
     )
     upload_local_to_nfs(agent_path, "kris")
 
+    # handle args
+    nargs = len(args)
+    args = [str(nargs)] + list(args)
+
     # run job
     executable_name = os.path.basename(executable)
     job_info = client.run(
-        "kris/agent.py kris/executable.tar.gz " + executable_name,
+        "kris/agent.py kris/executable.tar.gz "
+        + executable_name + " " + " ".join(args),
         base_image=image,
     )
 
