@@ -250,6 +250,11 @@ class ImageCache:
         cache = self._load_cache()
         return checksum in cache
 
+    def get(self, path):
+        checksum = self._calc_checksum(path)
+        cache = self._load_cache()
+        return cache[checksum]
+
     def put(self, path, image_id):
         checksum = self._calc_checksum(path)
         cache = self._load_cache()
@@ -410,20 +415,30 @@ def logs(job_id, service, image):
 @main.command()
 @click.argument("executable")
 @click.option("--image")
-def run(executable, image):
+@click.option("--root")
+def run(executable, image, root):
+    # detect root folder
     executable = os.path.abspath(executable)
     executable_path = os.path.dirname(executable)
     executable_name = os.path.basename(executable)
+
+    # upload executable
+    upload_local_to_nfs(executable_path, "kris/executable.tar.gz")
+
+    # upload agent
     agent_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "agent.py",
     )
-    upload_local_to_nfs(executable_path, "kris/executable.tar.gz")
     upload_local_to_nfs(agent_path, "kris")
+
+    # run job
     job_info = client.run(
         "kris/agent.py kris/executable.tar.gz " + executable_name,
         base_image=image,
     )
+
+    # print logs
     for line in client.wait_for_logs(job_info["job_name"]):
         print(line, end="")
 
@@ -448,6 +463,5 @@ def upload(local_path, nfs_path):
 def build_image(requirements):
     click.secho(f"Building image...", bold=True)
     image = _build_image(requirements)
-    client.wait_for_job(job_info["job_name"], service=True)
     click.secho(f"Image was built successfully. Identifier: {image}",
                 bold=True, fg="green")
