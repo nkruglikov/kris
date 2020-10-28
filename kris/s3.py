@@ -1,4 +1,5 @@
 import os
+import hashlib
 
 import boto3
 
@@ -32,6 +33,10 @@ class Bucket:
         self._properties = config.buckets[alias]
 
     def upload_local_file(self, path):
+        path = os.path.abspath(os.path.expanduser(path))
+        checksum = file_checksum(path)
+        s3_path = f"kris/{checksum}_" + os.path.basename(path)
+
         session = boto3.session.Session()
         s3_client = session.client(
             service_name="s3",
@@ -39,8 +44,8 @@ class Bucket:
             aws_secret_access_key=self.secret_access_key,
             endpoint_url=self.endpoint_url,
         )
-        s3_path = "kris/" + os.path.basename(path)
         s3_client.upload_file(path, self.bucket_id, s3_path)
+
         return self.make_path(s3_path)
 
     def __getattr__(self, name):
@@ -90,6 +95,18 @@ class Path:
         tail = "/".join(self.parts)
         return f"s3://{self.bucket.bucket_id}/{tail}"
 
+    def to_nfs(self):
+        tail = "/".join(self.parts)
+        return f".kris/s3/{self.bucket.bucket_id}/{tail}"
+
     @staticmethod
     def is_correct(path):
         return path.startswith("s3://")
+
+
+def file_checksum(path):
+    # FIXME: has duplicate in main.py
+    algo = hashlib.sha256()
+    with open(path, "rb") as inp:
+        algo.update(inp.read())
+    return algo.hexdigest()

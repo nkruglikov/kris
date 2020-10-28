@@ -80,6 +80,13 @@ class Client:
         r = self._api("GET", f"{prefix}/jobs")
         return r["jobs"]
 
+    def list_nfs_files(self, path):
+        job_info = self._api("POST", "/service/storage/list",
+                             body={"path": path})
+        job_name = job_info["job_name"]
+        self.wait_for_job(job_name, service=True)
+        return self._api("GET", f"/service/storage/list/{job_name}/json")
+
     def status(self, job_id, service=False):
         prefix = "/service" if service else ""
         return self._api("GET", f"{prefix}/jobs/{job_id}")
@@ -159,8 +166,9 @@ class Client:
         ),
         logger=logger,
     )
-    def _api(self, verb, method, *, headers=None, body=None, **kwargs):
+    def _api(self, verb, method, *, headers=None, body=None, stream=False):
         # FIXME: this method is a mess
+
         # Construct headers
         default_headers = {
             "X-Api-Key": self.user_data.api_key,
@@ -183,7 +191,7 @@ class Client:
         logger.debug(f"> {verb} {method} {print_headers} {print_body}")
 
         r = requests.request(verb, self.API_URL + method,
-                             headers=headers, json=body, **kwargs)
+                             headers=headers, json=body, stream=stream)
 
         if method == "/auth":
             print_response = self._censor(r.json(),
@@ -194,7 +202,7 @@ class Client:
 
         # Return result
         if r.status_code == requests.codes.ok:
-            if "logs" in method:
+            if stream:
                 return self._stream_iterator(r)
             return r.json()
 
@@ -270,10 +278,7 @@ class ImageCache:
             json.dump(cache, out)
 
     def _calc_checksum(self, path):
-        algo = hashlib.sha256()
-        with open(path, "rb") as inp:
-            algo.update(inp.read())
-        return algo.hexdigest()
+        return file_hash(path)
 
     @staticmethod
     def _get_default_path():
@@ -281,14 +286,22 @@ class ImageCache:
             os.path.join("~", ".config", "kris", "image_cache.json"))
 
 
+def file_hash(path):
+    algo = hashlib.sha256()
+    with open(path, "rb") as inp:
+        algo.update(inp.read())
+    return algo.hexdigest()
+
 
 def human_time(timestamp):
     return datetime.datetime.fromtimestamp(timestamp) \
                             .isoformat(" ", "seconds")
 
 
-def upload_local_to_nfs(local_path, nfs_path):
+def upload_local_to_nfs(local_path):
     bucket = s3.Bucket()
+
+    # Make archive if directory and upload to S3
     if os.path.isdir(local_path):
         with tempfile.TemporaryDirectory() as tmp:
             archive_path = os.path.join(tmp, "archive")
@@ -299,11 +312,21 @@ def upload_local_to_nfs(local_path, nfs_path):
     else:
         click.secho(f"Uploading \"{local_path}\" to S3...", bold=True)
         s3_path = bucket.upload_local_file(local_path)
+
+    # Transfer from S3 to NFS
+    nfs_path = s3_path.to_nfs()
     click.secho(f"Transfering from S3 to NFS: {nfs_path}...", bold=True)
+
+    if nfs_file_exists(f"/home/jovyan/{nfs_path}"):
+        # Don't transfer if exists
+        click.secho(f"Upload successful", fg="green", bold=True)
+        return nfs_path
+
     job_info = client.transfer_file(str(s3_path), nfs_path)
     job_info = client.wait_for_job(job_info["job_name"], service=True)
     if job_info["status"] == "Complete":
         click.secho(f"Upload successful", fg="green", bold=True)
+        return nfs_path
     elif job_info["status"] == "Failed":
         click.secho(f"Upload unsuccessful", fg="red", bold=True)
     else:
@@ -311,11 +334,18 @@ def upload_local_to_nfs(local_path, nfs_path):
                     + job_info["status"], fg="red", bold=True)
 
 
+def nfs_file_exists(path):
+    files = client.list_nfs_files(path)["ls"]
+    if len(files) == 1 and files[0]["size"] == "No":
+        return False
+    return True
+
+
 def _build_image(requirements_path):
     if image_cache.has(requirements_path):
         return image_cache.get(requirements_path)
-    upload_local_to_nfs(requirements_path, "kris")
-    job_info = client.build_image("kris/requirements.txt")
+    nfs_path = upload_local_to_nfs(requirements_path)
+    job_info = client.build_image(nfs_path)
     image = job_info["image"]
     client.wait_for_job(job_info["job_name"], service=True)
     image_cache.put(requirements_path, image)
@@ -437,14 +467,14 @@ def run(executable, args, image, requirements, root):
         image = _build_image(requirements)
 
     # upload executable
-    upload_local_to_nfs(root, "kris/executable.tar.gz")
+    archive_nfs_path = upload_local_to_nfs(root)
 
     # upload agent
     agent_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "agent.py",
     )
-    upload_local_to_nfs(agent_path, "kris")
+    agent_nfs_path = upload_local_to_nfs(agent_path)
 
     # handle args
     nargs = len(args)
@@ -453,7 +483,7 @@ def run(executable, args, image, requirements, root):
     # run job
     executable_name = os.path.basename(executable)
     job_info = client.run(
-        "kris/agent.py kris/executable.tar.gz "
+        f"{agent_nfs_path} {archive_nfs_path} "
         + executable_name + " " + " ".join(args),
         base_image=image,
     )
@@ -475,7 +505,8 @@ def transfer(src, dst):
 @click.argument("local_path")
 @click.argument("nfs_path")
 def upload(local_path, nfs_path):
-    upload_local_to_nfs(local_path, nfs_path)
+    nfs_path = upload_local_to_nfs(local_path)
+    click.secho(f"Uploaded {local_path} to NFS: {nfs_path}")
 
 
 @main.command()
