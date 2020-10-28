@@ -4,6 +4,7 @@ import logging
 
 import boto3
 import toml
+from botocore.exceptions import ClientError
 
 
 logger = logging.getLogger(__name__)
