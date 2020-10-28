@@ -12,17 +12,40 @@ logger.setLevel(logging.DEBUG)
 
 
 def get_kris_path():
-    return os.path.expanduser(
-            os.path.join("~", ".kris"))
+    kris_path = os.path.expanduser(os.path.join("~", ".kris"))
+    if not os.path.exists(kris_path):
+        os.makedirs(kris_path)
+    return kris_path
 
 
 class Config:
     def __init__(self):
-        self._buckets = toml.load(self._get_bucket_config_path())
+        bucket_config_path = self._get_bucket_config_path()
+        if not os.path.exists(bucket_config_path):
+            with open(bucket_config_path, "w") as out:
+                toml.dump({}, out)
+        self._buckets = toml.load(bucket_config_path)
 
     @property
     def buckets(self):
         return self._buckets
+
+    def add_bucket(self, *,
+        alias=None,
+        bucket_id=None,
+        namespace=None,
+        access_key_id=None,
+        secret_access_key=None
+    ):
+        self._buckets[alias] = dict(
+            bucket_id=bucket_id,
+            namespace=namespace,
+            access_key_id=access_key_id,
+            secret_access_key=secret_access_key,
+        )
+        with open(self._get_bucket_config_path(), "w") as out:
+            toml.dump(self._buckets, out)
+        return Bucket(alias)
 
     @staticmethod
     def _get_bucket_config_path():

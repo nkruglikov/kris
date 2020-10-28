@@ -4,6 +4,7 @@ import itertools
 import json
 import logging
 import shutil
+import sys
 import tempfile
 from copy import deepcopy
 
@@ -358,6 +359,34 @@ def _build_image(requirements_path):
     return image
 
 
+def _add_bucket(alias=None):
+    if alias is None:
+        click.secho("Enter alias for a new bucket, e. g. \"my-bucket\"",
+                    bold=True)
+    while alias is None:
+        alias = click.prompt("alias")
+        if alias in s3.config.buckets:
+            click.secho(f"Bucket {alias} already exists", bold=True, fg="red")
+            alias = None
+    click.secho("Enter creditials for a new bucket:")
+    bucket_id = click.prompt("bucket_id")
+    namespace = click.prompt("namespace")
+    access_key_id = click.prompt("access_key_id")
+    secret_access_key = click.prompt("secret_access_key")
+    s3.config.add_bucket(
+        alias=alias,
+        bucket_id=bucket_id,
+        namespace=namespace,
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
+    )
+    click.secho(f"Bucket {alias} was created successfully!",
+                bold=True, fg="green")
+    config_path = s3.config._get_bucket_config_path()
+    click.secho(f"Your bucket configuration is stored here: {config_path}",
+                bold=True)
+
+
 client = Client()
 image_cache = ImageCache()
 
@@ -369,6 +398,18 @@ def main(debug):
         handler.setLevel(logging.DEBUG)
     else:
         handler.setLevel(logging.INFO)
+
+    current_command  = click.get_current_context().invoked_subcommand
+
+    if not client.is_authorized and current_command != "auth":
+        click.secho("You are not authorized.\n"
+                    "Run `kris auth` to authorize.", bold=True, fg="red")
+        sys.exit(1)
+
+    if "default" not in s3.config.buckets and current_command != "add-bucket":
+        click.secho("No default bucket is set.\n"
+                    "Run `kris add-bucket` to add bucket.", bold=True, fg="red")
+        sys.exit(1)
 
 
 @main.command()
@@ -539,3 +580,11 @@ def build_image(requirements):
     image = _build_image(requirements)
     click.secho(f"Image was built successfully. Identifier: {image}",
                 bold=True, fg="green")
+
+
+@main.command()
+def add_bucket():
+    if "default" not in s3.config.buckets:
+        _add_bucket("default")
+    else:
+        _add_bucket()
