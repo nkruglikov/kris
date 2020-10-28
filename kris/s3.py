@@ -11,20 +11,22 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
+def get_kris_path():
+    return os.path.expanduser(
+            os.path.join("~", ".kris"))
+
+
 class Config:
-    def __init__(self, path=None):
-        if path is None:
-            path = self._get_default_path()
-        self._dict = toml.load(path)
+    def __init__(self):
+        self._buckets = toml.load(self._get_bucket_config_path())
 
     @property
     def buckets(self):
-        return self._dict["buckets"]
+        return self._buckets
 
     @staticmethod
-    def _get_default_path():
-        return os.path.expanduser(
-            os.path.join("~", ".config", "kris", "config.toml"))
+    def _get_bucket_config_path():
+        return os.path.join(get_kris_path(), "buckets.toml")
 
 
 

@@ -251,11 +251,9 @@ class Client:
 
 
 class ImageCache:
-    def __init__(self, path=None):
-        if path is None:
-            path = self._get_default_path()
-        self.path = path
-        if not os.path.exists(path):
+    def __init__(self):
+        self.path = self._get_default_path()
+        if not os.path.exists(self.path):
             self._dump_cache({})
 
     def has(self, path):
@@ -287,8 +285,7 @@ class ImageCache:
 
     @staticmethod
     def _get_default_path():
-        return os.path.expanduser(
-            os.path.join("~", ".config", "kris", "image_cache.json"))
+        return os.path.join(s3.get_kris_path(), "image_cache.json")
 
 
 def human_time(timestamp):
