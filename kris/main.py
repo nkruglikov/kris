@@ -480,10 +480,6 @@ def run(executable, args, image, requirements, root):
         click.secho(f"Building image...", bold=True)
         image = _build_image(requirements)
 
-    click.secho("Uploading script...", bold=True)
-    # upload executable
-    archive_nfs_path = upload_local_to_nfs(root)
-
     # upload agent
     click.secho("Uploading agent...", bold=True)
     agent_path = os.path.join(
@@ -492,27 +488,32 @@ def run(executable, args, image, requirements, root):
     )
     agent_nfs_path = upload_local_to_nfs(agent_path)
 
+    # upload executable
+    click.secho(f"Uploading {root}...", bold=True)
+    archive_nfs_path = upload_local_to_nfs(root)
+
     # handle args
     click.secho("Handling args...", bold=True)
     nargs = len(args)
     args = [str(nargs)] + list(args)
     for i, arg in enumerate(args):
         if s3.Path.is_correct(arg):
+            click.secho(f"  - {arg} ...", bold=True)
             s3_path = s3.Path(arg)
             nfs_path = s3_to_nfs(s3_path)
             args[i] = f"/home/jovyan/{nfs_path}"
 
     # run job
     click.secho("Launching job...", bold=True)
-    executable_name = os.path.basename(executable)
+    executable_path = os.path.relpath(executable, root)
     job_info = client.run(
         f"{agent_nfs_path} {archive_nfs_path} "
-        + executable_name + " " + " ".join(args),
+        + executable_path + " " + " ".join(args),
         base_image=image,
     )
     click.secho(f"Job launched: {job_info['job_name']}", bold=True, fg="green")
 
-    click.secho("Waiting for logs... You can kill kris now safely.", bold=True)
+    click.secho("Waiting for logs... You can kill kris safely now.", bold=True)
     # print logs
     for line in client.wait_for_logs(job_info["job_name"]):
         print(line, end="")
