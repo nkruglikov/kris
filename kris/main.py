@@ -36,20 +36,37 @@ class UserData:
     ]
     KEYRING = "kris"
 
+    def _get_data(self):
+        data = keyring.get_password(self.KEYRING, "data")
+        if data is None:
+            data = {}
+        else:
+            data = json.loads(data)
+        return data
+
+    def _set_data(self, data):
+        data = json.dumps(data)
+        keyring.set_password(self.KEYRING, "data", data)
+
     def __getattr__(self, name):
         if name in self.DATA_FIELDS:
-            return keyring.get_password(self.KEYRING, name)
+            data = self._get_data()
+            return data.get(name)
         raise AttributeError(name)
 
     def __setattr__(self, name, value):
         if name in self.DATA_FIELDS:
-            keyring.set_password(self.KEYRING, name, value)
+            data = self._get_data()
+            data[name] = value
+            self._set_data(data)
             return
         raise AttributeError(name)
 
     def __delattr__(self, name):
         if name in self.DATA_FIELDS:
-            keyring.delete_password(self.KEYRING, name)
+            data = self._get_data()
+            del data[name]
+            self._set_data(data)
             return
         raise AttributeError(name)
 
