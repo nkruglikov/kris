@@ -372,7 +372,9 @@ def _build_image(requirements_path):
     nfs_path = upload_local_to_nfs(requirements_path)
     job_info = client.build_image(nfs_path)
     image = job_info["image"]
-    client.wait_for_job(job_info["job_name"], service=True)
+    job_info = client.wait_for_job(job_info["job_name"], service=True)
+    if job_info["status"] == "Failed":
+        raise RuntimeError(f"Image building job {job_info['job_name']} failed.")
     image_cache.put(requirements_path, image)
     return image
 
