@@ -112,7 +112,9 @@ class Client:
             "n_workers": n_workers,
             "n_gpus": n_gpus,
             "warm_cache": False,
-            "flags": {"please": "don't"},
+            "flags": {"invisible": "flag"},  # API doesn't use these flags.
+                                             # You have to pass them through
+                                             # the "script" argument
         }
         r = self._api("POST", "/jobs", body=body)
         return r
@@ -294,7 +296,7 @@ def human_time(timestamp):
                             .isoformat(" ", "seconds")
 
 
-def upload_local_to_nfs(local_path):
+def local_to_s3(local_path):
     bucket = s3.Bucket()
 
     # Make archive if directory and upload to S3
@@ -308,8 +310,10 @@ def upload_local_to_nfs(local_path):
     else:
         logger.debug(f"Uploading \"{local_path}\" to S3...")
         s3_path = bucket.upload_local_file(local_path)
+    return s3_path
 
-    # Transfer from S3 to NFS
+
+def s3_to_nfs(s3_path):
     nfs_path = s3_path.to_nfs()
     logger.debug(f"Transfering from S3 to NFS: {nfs_path}...")
 
@@ -329,6 +333,12 @@ def upload_local_to_nfs(local_path):
         logger.debug(f"Upload job finished with unknown status: "
                      + job_info["status"])
         logger.debug(f"Upload failed: {nfs_path}")
+
+
+def upload_local_to_nfs(local_path):
+    s3_path = local_to_s3(local_path)
+    nfs_path = s3_to_nfs(s3_path)
+    return nfs_path
 
 
 def nfs_file_exists(path):
@@ -451,6 +461,9 @@ def logs(job_id, service, image):
 @click.option("--root")
 def run(executable, args, image, requirements, root):
     executable = os.path.abspath(executable)
+    if not os.path.exists(executable):
+        click.secho(f"File {executable} doesn't exist", bold=True, fg="red")
+        return
 
     # detect root folder
     if root is None:
@@ -480,8 +493,14 @@ def run(executable, args, image, requirements, root):
     agent_nfs_path = upload_local_to_nfs(agent_path)
 
     # handle args
+    click.secho("Handling args...", bold=True)
     nargs = len(args)
     args = [str(nargs)] + list(args)
+    for i, arg in enumerate(args):
+        if s3.Path.is_correct(arg):
+            s3_path = s3.Path(arg)
+            nfs_path = s3_to_nfs(s3_path)
+            args[i] = f"/home/jovyan/{nfs_path}"
 
     # run job
     click.secho("Launching job...", bold=True)
@@ -493,7 +512,7 @@ def run(executable, args, image, requirements, root):
     )
     click.secho(f"Job launched: {job_info['job_name']}", bold=True, fg="green")
 
-    click.secho("Waiting for logs...", bold=True)
+    click.secho("Waiting for logs... You can kill kris now safely.", bold=True)
     # print logs
     for line in client.wait_for_logs(job_info["job_name"]):
         print(line, end="")

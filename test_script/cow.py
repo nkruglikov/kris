@@ -1,5 +1,5 @@
-import cowsay
 import datetime
+import cowsay
 
 
 now = datetime.datetime.now()
