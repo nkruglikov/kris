@@ -130,6 +130,7 @@ class Client:
             "n_workers": n_workers,
             "n_gpus": n_gpus,
             "warm_cache": False,
+            "type": "pytorch",
             "flags": {"invisible": "flag"},  # API doesn't use these flags.
                                              # You have to pass them through
                                              # the "script" argument
@@ -515,17 +516,33 @@ def logs(job_id, service):
 @main.command()
 @click.argument("script")
 @click.argument("args", nargs=-1)
+@click.option("--gpu", help="Number of GPUs. --gpu=\"2x4\" "
+                            "will run job on two pods with 4 GPUs each.")
 @click.option("--image", help="Set custom image.")
 @click.option("--requirements", help="Path to requirements.txt.\n"
                                      "Will build custom image.")
 @click.option("--root", help="Custom project root. "
                              "(default: parent directory of SCRIPT)")
-def run(script, args, image, requirements, root):
+def run(script, args, gpu, image, requirements, root):
     """Run script on Christofari."""
     executable = os.path.abspath(script)
     if not os.path.exists(executable):
         click.secho(f"File {executable} doesn't exist", bold=True, fg="red")
-        return
+        sys.exit(1)
+
+    # parse gpu
+    n_workers = 1
+    n_gpus = 1
+    if gpu is not None:
+        try:
+            gpu_parts = gpu.split("x")
+            if len(gpu_parts) < 2:
+                n_gpus = int(gpu_parts[0])
+            else:
+                n_workers = int(gpu_parts[0])
+                n_gpus = int(gpu_parts[1])
+        except Exception:
+            click.secho(f"Invalid GPU format: {gpu}")
 
     # detect root folder
     if root is None:
@@ -572,6 +589,8 @@ def run(script, args, image, requirements, root):
         f"{agent_nfs_path} {archive_nfs_path} "
         + executable_path + " " + " ".join(args),
         base_image=image,
+        n_workers=n_workers,
+        n_gpus=n_gpus,
     )
     click.secho(f"Job launched: {job_info['job_name']}", bold=True, fg="green")
 
