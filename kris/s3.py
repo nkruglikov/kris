@@ -105,8 +105,7 @@ class Path:
 
 
 def file_checksum(path):
-    # FIXME: has duplicate in main.py
-    algo = hashlib.sha256()
+    algo = hashlib.md5()
     with open(path, "rb") as inp:
         algo.update(inp.read())
     return algo.hexdigest()

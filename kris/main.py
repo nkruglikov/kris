@@ -278,19 +278,12 @@ class ImageCache:
             json.dump(cache, out)
 
     def _calc_checksum(self, path):
-        return file_hash(path)
+        return s3.file_checksum(path)
 
     @staticmethod
     def _get_default_path():
         return os.path.expanduser(
             os.path.join("~", ".config", "kris", "image_cache.json"))
-
-
-def file_hash(path):
-    algo = hashlib.sha256()
-    with open(path, "rb") as inp:
-        algo.update(inp.read())
-    return algo.hexdigest()
 
 
 def human_time(timestamp):
@@ -305,33 +298,34 @@ def upload_local_to_nfs(local_path):
     if os.path.isdir(local_path):
         with tempfile.TemporaryDirectory() as tmp:
             archive_path = os.path.join(tmp, "archive")
-            click.secho(f"Compressing \"{local_path}\"...", bold=True)
-            shutil.make_archive(archive_path, "gztar", local_path)
-            click.secho(f"Uploading \"{local_path}\" to S3...", bold=True)
-            s3_path = bucket.upload_local_file(archive_path + ".tar.gz")
+            logger.debug(f"Compressing \"{local_path}\"...")
+            shutil.make_archive(archive_path, "zip", local_path)
+            logger.debug(f"Uploading \"{local_path}\" to S3...")
+            s3_path = bucket.upload_local_file(archive_path + ".zip")
     else:
-        click.secho(f"Uploading \"{local_path}\" to S3...", bold=True)
+        logger.debug(f"Uploading \"{local_path}\" to S3...")
         s3_path = bucket.upload_local_file(local_path)
 
     # Transfer from S3 to NFS
     nfs_path = s3_path.to_nfs()
-    click.secho(f"Transfering from S3 to NFS: {nfs_path}...", bold=True)
+    logger.debug(f"Transfering from S3 to NFS: {nfs_path}...")
 
     if nfs_file_exists(f"/home/jovyan/{nfs_path}"):
         # Don't transfer if exists
-        click.secho(f"Upload successful", fg="green", bold=True)
+        logger.debug(f"{nfs_path} found in cache")
         return nfs_path
 
     job_info = client.transfer_file(str(s3_path), nfs_path)
     job_info = client.wait_for_job(job_info["job_name"], service=True)
     if job_info["status"] == "Complete":
-        click.secho(f"Upload successful", fg="green", bold=True)
+        logger.debug(f"Upload succeeded: {nfs_path}")
         return nfs_path
     elif job_info["status"] == "Failed":
-        click.secho(f"Upload unsuccessful", fg="red", bold=True)
+        logger.debug(f"Upload failed: {nfs_path}")
     else:
-        click.secho(f"Upload job finished with unknown status: "
-                    + job_info["status"], fg="red", bold=True)
+        logger.debug(f"Upload job finished with unknown status: "
+                     + job_info["status"])
+        logger.debug(f"Upload failed: {nfs_path}")
 
 
 def nfs_file_exists(path):
@@ -343,7 +337,9 @@ def nfs_file_exists(path):
 
 def _build_image(requirements_path):
     if image_cache.has(requirements_path):
-        return image_cache.get(requirements_path)
+        image = image_cache.get(requirements_path)
+        logger.debug(f"Image was found in cache: {image}")
+        return image
     nfs_path = upload_local_to_nfs(requirements_path)
     job_info = client.build_image(nfs_path)
     image = job_info["image"]
@@ -466,10 +462,12 @@ def run(executable, args, image, requirements, root):
         click.secho(f"Building image...", bold=True)
         image = _build_image(requirements)
 
+    click.secho("Uploading script...", bold=True)
     # upload executable
     archive_nfs_path = upload_local_to_nfs(root)
 
     # upload agent
+    click.secho("Uploading agent...", bold=True)
     agent_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "agent.py",
@@ -481,13 +479,16 @@ def run(executable, args, image, requirements, root):
     args = [str(nargs)] + list(args)
 
     # run job
+    click.secho("Launching job...", bold=True)
     executable_name = os.path.basename(executable)
     job_info = client.run(
         f"{agent_nfs_path} {archive_nfs_path} "
         + executable_name + " " + " ".join(args),
         base_image=image,
     )
+    click.secho(f"Job launched: {job_info['job_name']}", bold=True, fg="green")
 
+    click.secho("Waiting for logs...", bold=True)
     # print logs
     for line in client.wait_for_logs(job_info["job_name"]):
         print(line, end="")
