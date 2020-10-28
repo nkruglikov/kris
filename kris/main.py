@@ -409,7 +409,7 @@ image_cache = ImageCache()
 
 
 @click.group()
-@click.option("--debug", is_flag=True, help="enable debug output")
+@click.option("--debug", is_flag=True, help="Enable debug output.")
 def main(debug):
     if debug:
         handler.setLevel(logging.DEBUG)
@@ -430,8 +430,9 @@ def main(debug):
 
 
 @main.command()
-@click.option("-f", "--force", is_flag=True, help="force rewrite credentials")
+@click.option("-f", "--force", is_flag=True, help="Force rewrite credentials.")
 def auth(force):
+    """Authorize client."""
     if client.is_authorized and not force:
         click.secho(
             "You are already authorized.\n"
@@ -459,9 +460,11 @@ def auth(force):
     client.auth(email, password, api_key)
 
 
-@main.command()
-@click.option("--service", is_flag=True)
+@main.command("list")
+@click.option("--service", is_flag=True,
+        help="Use this flag for service jobs (build image, copy from S3 etc).")
 def list_jobs(service):
+    """Print list of your jobs."""
     jobs = client.list_jobs(service)
     if len(jobs) == 0:
         click.secho("No jobs", bold=True)
@@ -478,7 +481,7 @@ def list_jobs(service):
         click.secho(f"{started}  {status}\t{name}", fg="yellow", bold=True)
 
 
-@main.command()
+@main.command(hidden=True)
 @click.argument("job_id")
 @click.option("--service", is_flag=True)
 def status(job_id, service):
@@ -502,20 +505,24 @@ def status(job_id, service):
 
 @main.command()
 @click.argument("job_id")
-@click.option("--service", is_flag=True)
-@click.option("--image", is_flag=True)
-def logs(job_id, service, image):
-    click.echo_via_pager(client.logs(job_id, service, image))
+@click.option("--service", is_flag=True,
+        help="Use this flag for service jobs (build image, copy from S3 etc).")
+def logs(job_id, service):
+    """Show job logs."""
+    click.echo_via_pager(client.logs(job_id, service))
 
 
 @main.command()
-@click.argument("executable")
+@click.argument("script")
 @click.argument("args", nargs=-1)
-@click.option("--image")
-@click.option("--requirements")
-@click.option("--root")
-def run(executable, args, image, requirements, root):
-    executable = os.path.abspath(executable)
+@click.option("--image", help="Set custom image.")
+@click.option("--requirements", help="Path to requirements.txt.\n"
+                                     "Will build custom image.")
+@click.option("--root", help="Custom project root. "
+                             "(default: parent directory of SCRIPT)")
+def run(script, args, image, requirements, root):
+    """Run script on Christofari."""
+    executable = os.path.abspath(script)
     if not os.path.exists(executable):
         click.secho(f"File {executable} doesn't exist", bold=True, fg="red")
         return
@@ -574,7 +581,7 @@ def run(executable, args, image, requirements, root):
         print(line, end="")
 
 
-@main.command()
+@main.command(hidden=True)
 @click.argument("src")
 @click.argument("dst")
 def transfer(src, dst):
@@ -582,7 +589,7 @@ def transfer(src, dst):
     client.wait_for_job(job_info["job_name"], service=True)
 
 
-@main.command()
+@main.command(hidden=True)
 @click.argument("local_path")
 @click.argument("nfs_path")
 def upload(local_path, nfs_path):
@@ -590,7 +597,7 @@ def upload(local_path, nfs_path):
     click.secho(f"Uploaded {local_path} to NFS: {nfs_path}")
 
 
-@main.command()
+@main.command(hidden=True)
 @click.argument("requirements")
 def build_image(requirements):
     click.secho(f"Building image...", bold=True)
@@ -601,6 +608,7 @@ def build_image(requirements):
 
 @main.command()
 def add_bucket():
+    """Add bucket credentials to configuration."""
     if "default" not in s3.config.buckets:
         _add_bucket("default")
     else:
