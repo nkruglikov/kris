@@ -17,9 +17,12 @@ from . import s3
 
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
 handler = logging.StreamHandler()
 handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
 logger.addHandler(handler)
+s3.logger.addHandler(handler)
 
 
 class UserData:
@@ -356,7 +359,9 @@ image_cache = ImageCache()
 @click.option("--debug", is_flag=True, help="enable debug output")
 def main(debug):
     if debug:
-        logger.setLevel(logging.DEBUG)
+        handler.setLevel(logging.DEBUG)
+    else:
+        handler.setLevel(logging.INFO)
 
 
 @main.command()

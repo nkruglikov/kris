@@ -1,9 +1,13 @@
 import os
 import hashlib
+import logging
 
 import boto3
-
 import toml
+
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 class Config:
@@ -36,6 +40,7 @@ class Bucket:
         path = os.path.abspath(os.path.expanduser(path))
         checksum = file_checksum(path)
         s3_path = f"kris/{checksum}_" + os.path.basename(path)
+        logger.debug(f"Uploading to S3: {path} -> {s3_path}")
 
         session = boto3.session.Session()
         s3_client = session.client(
@@ -44,7 +49,21 @@ class Bucket:
             aws_secret_access_key=self.secret_access_key,
             endpoint_url=self.endpoint_url,
         )
-        s3_client.upload_file(path, self.bucket_id, s3_path)
+
+        # check if object exists
+        try:
+            s3_client.head_object(Bucket=self.bucket_id, Key=s3_path)
+            exists = True
+        except ClientError as exc:
+            if exc.response['Error']['Code'] != '404':
+                raise
+            exists = False
+
+        if not exists:
+            s3_client.upload_file(path, self.bucket_id, s3_path)
+            logger.debug(f"Uploaded to S3: {s3_path}")
+        else:
+            logger.debug(f"Already on S3: {s3_path}")
 
         return self.make_path(s3_path)
 
