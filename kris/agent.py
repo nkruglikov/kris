@@ -25,6 +25,6 @@ if not os.path.exists(job_path):
     shutil.unpack_archive(archive, job_path)
 os.chdir(job_path)
 
-command = ["python", executable] + args
+command = ["python3", executable] + args
 print("Agent is running script:", command)
 subprocess.run(command)

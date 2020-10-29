@@ -183,10 +183,10 @@ class Client:
         backoff.fibo,
         requests.exceptions.RequestException,
         max_time=60,
-        giveup=lambda e: (
-            # retry server errors and Too Many Requests
-            400 <= e.response.status_code < 500
-            and e.response.status_code != 429
+        giveup=lambda e: not (                # retry if:
+            e.response is None                # - connection error
+            or e.response.status_code >= 500  # - server error
+            or e.response.status_code == 429  # - Too Many Requests
         ),
         logger=logger,
     )
@@ -214,27 +214,27 @@ class Client:
                                              "access_key_id", "security_key"])
         logger.debug(f"> {verb} {method} {print_headers} {print_body}")
 
-        r = requests.request(verb, self.API_URL + method,
-                             headers=headers, json=body, stream=stream)
+        with requests.request(verb, self.API_URL + method,
+                headers=headers, json=body, stream=stream) as r:
 
-        if method == "/auth":
-            print_response = self._censor(r.json(),
-                                          ["access_token", "refresh_token"])
-        else:
-            print_response = r.text
-        logger.debug(f"< {r.status_code} {print_response}")
+            if method == "/auth":
+                print_response = self._censor(r.json(),
+                                              ["access_token", "refresh_token"])
+            else:
+                print_response = r.text
+            logger.debug(f"< {r.status_code} {print_response}")
 
-        # Return result
-        if r.status_code == requests.codes.ok:
-            if stream:
-                return self._stream_iterator(r)
-            return r.json()
+            # Return result
+            if r.status_code == requests.codes.ok:
+                if stream:
+                    return self._stream_iterator(r)
+                return r.json()
 
-        # Handle errors
-        if r.json().get("error_message") == "access_token expired":
-            self._get_access_token()
-            return self._api(verb, method, body=body, headers=headers)
-        r.raise_for_status()
+            # Handle errors
+            if r.json().get("error_message") == "access_token expired":
+                self._get_access_token()
+                return self._api(verb, method, body=body, headers=headers)
+            r.raise_for_status()
 
     def _stream_iterator(self, r):
         if r.encoding is None:
@@ -370,11 +370,16 @@ def _build_image(requirements_path):
         logger.debug(f"Image was found in cache: {image}")
         return image
     nfs_path = upload_local_to_nfs(requirements_path)
-    job_info = client.build_image(nfs_path)
-    image = job_info["image"]
-    job_info = client.wait_for_job(job_info["job_name"], service=True)
-    if job_info["status"] == "Failed":
-        raise RuntimeError(f"Image building job {job_info['job_name']} failed.")
+    while True:
+        job_info = client.build_image(nfs_path)
+        image = job_info["image"]
+        job_info = client.wait_for_job(job_info["job_name"], service=True)
+        if job_info["status"] == "Success":
+            logger.debug(f"Image {image} was built successfully")
+            break
+        else:
+            logger.info(f"Image building job {job_info['job_name']} failed. "
+                         "Restarting.")
     image_cache.put(requirements_path, image)
     return image
 
@@ -525,7 +530,8 @@ def logs(job_id, service):
                                      "Will build custom image.")
 @click.option("--root", help="Custom project root. "
                              "(default: parent directory of SCRIPT)")
-def run(script, args, gpu, image, requirements, root):
+@click.option("--logs", is_flag=True, help="Wait for logs and display them.")
+def run(script, args, gpu, image, requirements, root, logs):
     """Run script on Christofari."""
     executable = os.path.abspath(script)
     if not os.path.exists(executable):
@@ -596,10 +602,11 @@ def run(script, args, gpu, image, requirements, root):
     )
     click.secho(f"Job launched: {job_info['job_name']}", bold=True, fg="green")
 
-    click.secho("Waiting for logs... You can kill kris safely now.", bold=True)
-    # print logs
-    for line in client.wait_for_logs(job_info["job_name"]):
-        print(line, end="")
+    if logs:
+        click.secho("Waiting for logs... You can kill kris safely now.", bold=True)
+        # print logs
+        for line in client.wait_for_logs(job_info["job_name"]):
+            print(line, end="")
 
 
 @main.command(hidden=True)
