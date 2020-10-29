@@ -6,7 +6,7 @@
 
 To install and update, use:
 ```bash
-pip install --force-reinstall git+https://gitlab.com/chit-chat/kris.git
+python3 -m pip install --force-reinstall git+https://gitlab.com/chit-chat/kris.git
 ```
 
 Then run `kris auth` to authorize at Christofari and `kris add-bucket` to add
@@ -21,6 +21,10 @@ in their names.
 
 ## Usage
 See `kris --help` for details.
+
+## Troubleshooting
+Use `--debug` flag for more logs. If you encounter any problems, DM details and logs
+to me (Nikolai Kruglikov).
 
 ## Development
 ```bash
