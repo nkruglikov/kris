@@ -530,8 +530,9 @@ def logs(job_id, service):
                                      "Will build custom image.")
 @click.option("--root", help="Custom project root. "
                              "(default: parent directory of SCRIPT)")
+@click.option("--name", help="Job name")
 @click.option("--logs", is_flag=True, help="Wait for logs and display them.")
-def run(script, args, gpu, image, requirements, root, logs):
+def run(script, args, gpu, image, requirements, root, name, logs):
     """Run script on Christofari."""
     executable = os.path.abspath(script)
     if not os.path.exists(executable):
@@ -558,6 +559,10 @@ def run(script, args, gpu, image, requirements, root, logs):
     else:
         root = os.path.abspath(root)
 
+    # make name
+    if name is None:
+        name = "unnamed"
+
     # build image
     if requirements is not None:
         if image is not None:
@@ -582,7 +587,7 @@ def run(script, args, gpu, image, requirements, root, logs):
     # handle args
     click.secho("Handling args...", bold=True)
     nargs = len(args)
-    args = [str(nargs)] + list(args)
+    args = [str(nargs), name] + list(args)
     for i, arg in enumerate(args):
         if s3.Path.is_correct(arg):
             click.secho(f"  - {arg} ...", bold=True)
