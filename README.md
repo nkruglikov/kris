@@ -6,7 +6,7 @@
 
 To install and update, use:
 ```bash
-python3 -m pip install --force-reinstall git+https://gitlab.com/chit-chat/kris.git
+python3 -m pip install --force-reinstall git+https://github.com/nkruglikov/kris.git
 ```
 
 Then run `kris auth` to authorize at Christofari and `kris add-bucket` to add
